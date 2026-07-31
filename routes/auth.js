@@ -108,7 +108,7 @@ router.post('/forgot-password', async (req, res) => {
       const resetLink = process.env.FRONTEND_URL + '/reset-password.html?token=' + rawToken;
 
       try {
-        await resend.emails.send({
+        const { error: sendError } = await resend.emails.send({
           from: 'Videoteca <onboarding@resend.dev>',
           to: user.email,
           subject: 'Reimposta la password del tuo account Videoteca',
@@ -119,9 +119,13 @@ router.post('/forgot-password', async (req, res) => {
             <p>Il link è valido per un'ora. Se non sei stato tu a richiederlo, ignora pure questa email: la tua password resterà invariata.</p>
           `
         });
+        if (sendError) {
+          // Resend non lancia un'eccezione sugli errori di invio: li restituisce
+          // in questo campo. Li logghiamo ma non li mostriamo all'utente,
+          // per non rivelare se l'account esiste o meno.
+          console.error('Errore invio email di reset (Resend):', sendError);
+        }
       } catch (emailErr) {
-        // Logghiamo l'errore di invio ma non lo mostriamo all'utente,
-        // per non rivelare se l'account esiste o meno.
         console.error('Errore invio email di reset:', emailErr);
       }
     }

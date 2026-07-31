@@ -105,7 +105,7 @@ router.post('/forgot-password', async (req, res) => {
         [tokenHash, expires, user.id]
       );
 
-      const resetLink = process.env.FRONTEND_URL + '/reset-password.html?token=' + rawToken;
+      const resetLink = process.env.RESETPSW_URL + '/reset-password.html?token=' + rawToken;
 
       try {
         const { error: sendError } = await resend.emails.send({

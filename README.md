@@ -28,9 +28,27 @@ Copia `.env.example` in un file chiamato `.env` e compila i valori:
 - `DATABASE_URL` — stringa di connessione al database (da Neon)
 - `JWT_SECRET` — una stringa lunga e casuale, a tua scelta
 - `ALLOWED_ORIGINS` — l'indirizzo del tuo sito GitHub Pages
+- `RESEND_API_KEY` — chiave API di [Resend](https://resend.com), per inviare l'email di reset password
+- `FRONTEND_URL` — stesso indirizzo di `ALLOWED_ORIGINS`, usato per costruire il link dentro l'email
 - `PORT` — porta locale (Render la imposta da sé in produzione)
 
 Il file `.env` **non va mai caricato su GitHub**: è già escluso da `.gitignore`.
+
+## Reset della password
+
+Il file `schema.sql` aggiunge due colonne (`reset_token_hash`, `reset_token_expires`)
+alla tabella `users`. Se il database esiste già da prima di questa funzione,
+esegui su Neon (SQL Editor) anche queste due righe, non incluse in automatico
+dal resto dello script:
+
+```sql
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ;
+```
+
+Le email vengono inviate tramite Resend, dall'indirizzo di test
+`onboarding@resend.dev` (non richiede la verifica di un dominio proprio,
+adatto a un progetto personale).
 
 ## Provare in locale (facoltativo)
 

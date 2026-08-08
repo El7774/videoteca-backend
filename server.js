@@ -5,6 +5,7 @@ const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const meRoutes = require('./routes/me');
 const showsRoutes = require('./routes/shows');
+const catalogRoutes = require('./routes/catalog');
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.use(express.json({ limit: '5mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/me', meRoutes);
 app.use('/api/shows', showsRoutes);
+app.use('/api/catalog', catalogRoutes);
 
 app.get('/', (req, res) => {
   res.send('Videoteca API attiva.');

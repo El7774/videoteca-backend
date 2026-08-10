@@ -93,4 +93,89 @@ router.get('/details', async (req, res) => {
   }
 });
 
+// ==========================================================
+// Anime (Jikan API — non ufficiale, basata su MyAnimeList, gratuita e senza chiave)
+// ==========================================================
+
+const JIKAN_BASE = 'https://api.jikan.moe/v4';
+
+function parseJikanDuration(duration) {
+  // Jikan restituisce la durata come testo, es. "24 min per ep" oppure "1 hr 30 min"
+  if (!duration) return null;
+  let minutes = 0;
+  const hrMatch = duration.match(/(\d+)\s*hr/);
+  const minMatch = duration.match(/(\d+)\s*min/);
+  if (hrMatch) minutes += parseInt(hrMatch[1], 10) * 60;
+  if (minMatch) minutes += parseInt(minMatch[1], 10);
+  return minutes || null;
+}
+
+// ---- Ricerca anime ----
+router.get('/search-anime', async (req, res) => {
+  const query = (req.query.query || '').trim();
+  if (!query) {
+    return res.status(400).json({ error: 'Specifica un termine di ricerca.' });
+  }
+
+  try {
+    const url = `${JIKAN_BASE}/anime?q=${encodeURIComponent(query)}&limit=15&sfw=true`;
+    const jikanRes = await fetch(url);
+    const data = await jikanRes.json();
+
+    if (!jikanRes.ok) {
+      return res.status(502).json({ error: 'Jikan non ha risposto correttamente.' });
+    }
+
+    const results = (data.data || []).map(a => ({
+      malId: a.mal_id,
+      mediaType: a.type === 'Movie' ? 'movie' : 'tv',
+      title: a.title_english || a.title,
+      year: a.year || (a.aired && a.aired.prop && a.aired.prop.from && a.aired.prop.from.year) || null,
+      posterUrl: (a.images && a.images.jpg && a.images.jpg.image_url) || null,
+      overview: a.synopsis || ''
+    }));
+
+    res.json(results);
+  } catch (err) {
+    console.error('Errore ricerca Jikan:', err);
+    res.status(500).json({ error: 'Errore del server durante la ricerca.' });
+  }
+});
+
+// ---- Dettagli di un anime, già pronti per essere aggiunti alla collezione ----
+router.get('/details-anime', async (req, res) => {
+  const { id } = req.query;
+  if (!id) {
+    return res.status(400).json({ error: 'Parametro mancante.' });
+  }
+
+  try {
+    const url = `${JIKAN_BASE}/anime/${id}`;
+    const jikanRes = await fetch(url);
+    const payload = await jikanRes.json();
+    const a = payload.data;
+
+    if (!jikanRes.ok || !a) {
+      return res.status(404).json({ error: 'Titolo non trovato su MyAnimeList.' });
+    }
+
+    const isMovie = a.type === 'Movie';
+    const episodeCount = a.episodes || 1; // se ancora in corso, Jikan può non saperlo ancora
+    const title = a.title_english || a.title;
+    const episodeRuntime = parseJikanDuration(a.duration);
+
+    res.json({
+      title,
+      type: isMovie ? 'film' : 'serie',
+      episodeRuntime,
+      seasons: isMovie
+        ? [{ episodeCount: 1, watched: [false] }]
+        : [{ episodeCount, watched: new Array(episodeCount).fill(false) }]
+    });
+  } catch (err) {
+    console.error('Errore dettagli Jikan:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
 module.exports = router;

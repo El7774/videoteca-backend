@@ -95,9 +95,63 @@ router.get('/details', async (req, res) => {
 
 // ==========================================================
 // Anime (Jikan API — non ufficiale, basata su MyAnimeList, gratuita e senza chiave)
+// Jikan applica un rate limit piuttosto stretto (circa 3 richieste al secondo,
+// 60 al minuto, per indirizzo IP) e in caso di superamento risponde con un errore
+// (tipicamente 429). Poiché la stessa query può arrivare più volte in pochi secondi
+// (ricerca live ad ogni tasto premuto, pagina di ricerca, verifica anime in fase di
+// aggiunta), qui sotto aggiungiamo un piccolo riprova-con-attesa e una cache in
+// memoria di breve durata, per restare sotto il limite senza cambiare le API esposte.
 // ==========================================================
 
 const JIKAN_BASE = 'https://api.jikan.moe/v4';
+
+const jikanCache = new Map(); // chiave -> { data, expiresAt }
+const JIKAN_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minuti: sufficiente a coprire una sessione di ricerca
+
+function getCached(key) {
+  const entry = jikanCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    jikanCache.delete(key);
+    return undefined;
+  }
+  return entry.data;
+}
+
+function setCached(key, data) {
+  jikanCache.set(key, { data, expiresAt: Date.now() + JIKAN_CACHE_TTL_MS });
+  // Pulizia occasionale per non far crescere la mappa all'infinito
+  if (jikanCache.size > 200) {
+    const now = Date.now();
+    for (const [k, v] of jikanCache) {
+      if (now > v.expiresAt) jikanCache.delete(k);
+    }
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Esegue una GET verso Jikan riprovando automaticamente se la risposta è 429
+// (rate limit) o un errore temporaneo del server (5xx), con una breve attesa
+// crescente tra un tentativo e l'altro. Restituisce { ok, status, data }.
+async function fetchJikan(url, attempt = 0) {
+  const res = await fetch(url);
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* risposta non JSON */ }
+
+  const isRateLimited = res.status === 429;
+  const isServerError = res.status >= 500;
+  if (!res.ok && (isRateLimited || isServerError) && attempt < 2) {
+    const retryAfterHeader = parseInt(res.headers.get('retry-after') || '', 10);
+    const waitMs = !isNaN(retryAfterHeader) ? retryAfterHeader * 1000 : 500 * (attempt + 1);
+    await sleep(waitMs);
+    return fetchJikan(url, attempt + 1);
+  }
+
+  return { ok: res.ok, status: res.status, data };
+}
 
 function parseJikanDuration(duration) {
   // Jikan restituisce la durata come testo, es. "24 min per ep" oppure "1 hr 30 min"
@@ -117,16 +171,21 @@ router.get('/search-anime', async (req, res) => {
     return res.status(400).json({ error: 'Specifica un termine di ricerca.' });
   }
 
+  const cacheKey = 'search:' + query.toLowerCase();
+  const cached = getCached(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
+
   try {
     const url = `${JIKAN_BASE}/anime?q=${encodeURIComponent(query)}&limit=15&sfw=true`;
-    const jikanRes = await fetch(url);
-    const data = await jikanRes.json();
+    const { ok, data } = await fetchJikan(url);
 
-    if (!jikanRes.ok) {
-      return res.status(502).json({ error: 'Jikan non ha risposto correttamente.' });
+    if (!ok) {
+      return res.status(502).json({ error: 'Jikan non ha risposto correttamente (troppe richieste in poco tempo, riprova tra qualche secondo).' });
     }
 
-    const results = (data.data || []).map(a => ({
+    const results = ((data && data.data) || []).map(a => ({
       malId: a.mal_id,
       mediaType: a.type === 'Movie' ? 'movie' : 'tv',
       title: a.title_english || a.title,
@@ -135,6 +194,7 @@ router.get('/search-anime', async (req, res) => {
       overview: a.synopsis || ''
     }));
 
+    setCached(cacheKey, results);
     res.json(results);
   } catch (err) {
     console.error('Errore ricerca Jikan:', err);
@@ -151,11 +211,10 @@ router.get('/details-anime', async (req, res) => {
 
   try {
     const url = `${JIKAN_BASE}/anime/${id}`;
-    const jikanRes = await fetch(url);
-    const payload = await jikanRes.json();
-    const a = payload.data;
+    const { ok, data: payload } = await fetchJikan(url);
+    const a = payload && payload.data;
 
-    if (!jikanRes.ok || !a) {
+    if (!ok || !a) {
       return res.status(404).json({ error: 'Titolo non trovato su MyAnimeList.' });
     }
 

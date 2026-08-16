@@ -33,7 +33,7 @@ router.get('/search', async (req, res) => {
         mediaType: r.media_type, // 'movie' oppure 'tv'
         title: r.media_type === 'movie' ? r.title : r.name,
         year: ((r.media_type === 'movie' ? r.release_date : r.first_air_date) || '').slice(0, 4) || null,
-        posterUrl: r.poster_path ? `https://image.tmdb.org/t/p/w200${r.poster_path}` : null,
+        posterUrl: r.poster_path ? `https://image.tmdb.org/t/p/w342${r.poster_path}` : null,
         overview: r.overview || ''
       }));
 
@@ -68,6 +68,8 @@ router.get('/details', async (req, res) => {
         title: data.title,
         type: 'film',
         episodeRuntime: data.runtime || null, // durata del film in minuti
+        posterUrl: data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : null,
+        backdropUrl: data.backdrop_path ? `https://image.tmdb.org/t/p/w1280${data.backdrop_path}` : null,
         seasons: [{ episodeCount: 1, watched: [false] }]
       });
     }
@@ -85,6 +87,8 @@ router.get('/details', async (req, res) => {
       title: data.name,
       type: 'serie',
       episodeRuntime: (data.episode_run_time && data.episode_run_time[0]) || null, // minuti medi per episodio
+      posterUrl: data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : null,
+      backdropUrl: data.backdrop_path ? `https://image.tmdb.org/t/p/w1280${data.backdrop_path}` : null,
       seasons: seasons.length ? seasons : [{ episodeCount: 1, watched: [false] }]
     });
   } catch (err) {

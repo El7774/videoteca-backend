@@ -97,4 +97,45 @@ router.get('/details', async (req, res) => {
   }
 });
 
+// ---- Nomi degli episodi di una stagione (serie TV) ----
+const episodesCache = new Map(); // 'tvId:season' -> { data, expiresAt }
+const EPISODES_CACHE_TTL_MS = 60 * 60 * 1000; // 1 ora: i nomi degli episodi cambiano raramente
+
+router.get('/episodes', async (req, res) => {
+  const { tvId, season } = req.query;
+  if (!tvId || !season) {
+    return res.status(400).json({ error: 'Parametri mancanti.' });
+  }
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  const cacheKey = tvId + ':' + season;
+  const cached = episodesCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return res.json(cached.data);
+  }
+
+  try {
+    const url = `${TMDB_BASE}/tv/${tvId}/season/${season}?api_key=${process.env.TMDB_API_KEY}&language=it-IT`;
+    const tmdbRes = await fetch(url);
+    const data = await tmdbRes.json();
+
+    if (!tmdbRes.ok) {
+      return res.status(502).json({ error: 'TMDB non ha risposto correttamente.' });
+    }
+
+    const episodes = (data.episodes || []).map(e => ({
+      episodeNumber: e.episode_number,
+      name: e.name || null
+    }));
+
+    episodesCache.set(cacheKey, { data: episodes, expiresAt: Date.now() + EPISODES_CACHE_TTL_MS });
+    res.json(episodes);
+  } catch (err) {
+    console.error('Errore episodi TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
 module.exports = router;

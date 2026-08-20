@@ -138,4 +138,47 @@ router.get('/episodes', async (req, res) => {
   }
 });
 
+// ---- Titoli di tendenza (per le sezioni "del momento" in home) ----
+const trendingCache = new Map(); // 'tv'|'movie' -> { data, expiresAt }
+const TRENDING_CACHE_TTL_MS = 60 * 60 * 1000; // 1 ora
+
+router.get('/trending', async (req, res) => {
+  const type = req.query.type === 'movie' ? 'movie' : 'tv';
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  const cached = trendingCache.get(type);
+  if (cached && Date.now() < cached.expiresAt) {
+    return res.json(cached.data);
+  }
+
+  try {
+    const url = `${TMDB_BASE}/trending/${type}/week?api_key=${process.env.TMDB_API_KEY}&language=it-IT`;
+    const tmdbRes = await fetch(url);
+    const data = await tmdbRes.json();
+
+    if (!tmdbRes.ok) {
+      return res.status(502).json({ error: 'TMDB non ha risposto correttamente.' });
+    }
+
+    const results = (data.results || [])
+      .slice(0, 15)
+      .map(r => ({
+        tmdbId: r.id,
+        mediaType: type,
+        title: type === 'movie' ? r.title : r.name,
+        year: ((type === 'movie' ? r.release_date : r.first_air_date) || '').slice(0, 4) || null,
+        posterUrl: r.poster_path ? `https://image.tmdb.org/t/p/w342${r.poster_path}` : null,
+        rating: typeof r.vote_average === 'number' ? Math.round(r.vote_average * 10) / 10 : null
+      }));
+
+    trendingCache.set(type, { data: results, expiresAt: Date.now() + TRENDING_CACHE_TTL_MS });
+    res.json(results);
+  } catch (err) {
+    console.error('Errore trending TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
 module.exports = router;

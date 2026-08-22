@@ -127,7 +127,9 @@ router.get('/episodes', async (req, res) => {
 
     const episodes = (data.episodes || []).map(e => ({
       episodeNumber: e.episode_number,
-      name: e.name || null
+      name: e.name || null,
+      stillUrl: e.still_path ? `https://image.tmdb.org/t/p/w300${e.still_path}` : null,
+      runtime: typeof e.runtime === 'number' ? e.runtime : null
     }));
 
     episodesCache.set(cacheKey, { data: episodes, expiresAt: Date.now() + EPISODES_CACHE_TTL_MS });
@@ -177,6 +179,55 @@ router.get('/trending', async (req, res) => {
     res.json(results);
   } catch (err) {
     console.error('Errore trending TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
+// ---- Generi popolari (per la sezione "Generi Popolari" in home) ----
+const POPULAR_GENRES = [
+  { id: 28, name: 'Azione' },
+  { id: 35, name: 'Commedia' },
+  { id: 18, name: 'Dramma' },
+  { id: 27, name: 'Horror' },
+  { id: 10749, name: 'Romantico' },
+  { id: 878, name: 'Fantascienza' },
+  { id: 16, name: 'Animazione' },
+  { id: 80, name: 'Crime' },
+  { id: 14, name: 'Fantasy' },
+  { id: 99, name: 'Documentario' }
+];
+
+const genresCache = new Map(); // genreId -> { data, expiresAt }
+const GENRES_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 ore: l'immagine rappresentativa di un genere cambia raramente
+
+router.get('/genres', async (req, res) => {
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  try {
+    const results = await Promise.all(POPULAR_GENRES.map(async genre => {
+      const cached = genresCache.get(genre.id);
+      if (cached && Date.now() < cached.expiresAt) return cached.data;
+
+      const url = `${TMDB_BASE}/discover/movie?api_key=${process.env.TMDB_API_KEY}&language=it-IT&sort_by=popularity.desc&with_genres=${genre.id}`;
+      const tmdbRes = await fetch(url);
+      const data = await tmdbRes.json();
+      const top = (data.results || [])[0];
+      const image = top ? (top.backdrop_path || top.poster_path) : null;
+
+      const entry = {
+        id: genre.id,
+        name: genre.name,
+        backdropUrl: image ? `https://image.tmdb.org/t/p/w780${image}` : null
+      };
+      genresCache.set(genre.id, { data: entry, expiresAt: Date.now() + GENRES_CACHE_TTL_MS });
+      return entry;
+    }));
+
+    res.json(results);
+  } catch (err) {
+    console.error('Errore generi TMDB:', err);
     res.status(500).json({ error: 'Errore del server.' });
   }
 });

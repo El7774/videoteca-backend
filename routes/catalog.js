@@ -232,4 +232,55 @@ router.get('/genres', async (req, res) => {
   }
 });
 
+// ---- Statistiche di una serie TV (per la sezione "I tuoi serie") ----
+const TV_STATUS_LABELS_IT = {
+  'Returning Series': 'In corso',
+  'Ended': 'Conclusa',
+  'Canceled': 'Cancellata',
+  'In Production': 'In produzione',
+  'Planned': 'Pianificata',
+  'Pilot': 'Pilot'
+};
+
+const tvStatsCache = new Map(); // tvId -> { data, expiresAt }
+const TV_STATS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 ore
+
+router.get('/tv-stats', async (req, res) => {
+  const { tvId } = req.query;
+  if (!tvId) {
+    return res.status(400).json({ error: 'Parametro mancante.' });
+  }
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  const cached = tvStatsCache.get(tvId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return res.json(cached.data);
+  }
+
+  try {
+    const url = `${TMDB_BASE}/tv/${tvId}?api_key=${process.env.TMDB_API_KEY}&language=it-IT`;
+    const tmdbRes = await fetch(url);
+    const data = await tmdbRes.json();
+
+    if (!tmdbRes.ok) {
+      return res.status(502).json({ error: 'TMDB non ha risposto correttamente.' });
+    }
+
+    const entry = {
+      voteAverage: typeof data.vote_average === 'number' ? Math.round(data.vote_average * 10) / 10 : null,
+      status: TV_STATUS_LABELS_IT[data.status] || data.status || null,
+      numberOfSeasons: typeof data.number_of_seasons === 'number' ? data.number_of_seasons : null,
+      numberOfEpisodes: typeof data.number_of_episodes === 'number' ? data.number_of_episodes : null
+    };
+
+    tvStatsCache.set(tvId, { data: entry, expiresAt: Date.now() + TV_STATS_CACHE_TTL_MS });
+    res.json(entry);
+  } catch (err) {
+    console.error('Errore statistiche TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
 module.exports = router;

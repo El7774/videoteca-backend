@@ -283,4 +283,43 @@ router.get('/tv-stats', async (req, res) => {
   }
 });
 
+// ---- Statistiche di un film (per la sezione "I tuoi film": voto medio TMDB) ----
+const movieStatsCache = new Map(); // movieId -> { data, expiresAt }
+const MOVIE_STATS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 ore
+
+router.get('/movie-stats', async (req, res) => {
+  const { movieId } = req.query;
+  if (!movieId) {
+    return res.status(400).json({ error: 'Parametro mancante.' });
+  }
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  const cached = movieStatsCache.get(movieId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return res.json(cached.data);
+  }
+
+  try {
+    const url = `${TMDB_BASE}/movie/${movieId}?api_key=${process.env.TMDB_API_KEY}&language=it-IT`;
+    const tmdbRes = await fetch(url);
+    const data = await tmdbRes.json();
+
+    if (!tmdbRes.ok) {
+      return res.status(502).json({ error: 'TMDB non ha risposto correttamente.' });
+    }
+
+    const entry = {
+      voteAverage: typeof data.vote_average === 'number' ? Math.round(data.vote_average * 10) / 10 : null
+    };
+
+    movieStatsCache.set(movieId, { data: entry, expiresAt: Date.now() + MOVIE_STATS_CACHE_TTL_MS });
+    res.json(entry);
+  } catch (err) {
+    console.error('Errore statistiche film TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
 module.exports = router;

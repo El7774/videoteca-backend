@@ -331,4 +331,86 @@ router.get('/movie-stats', async (req, res) => {
   }
 });
 
+// ---- Titoli di un genere, film e serie TV insieme (per la pagina dedicata al genere) ----
+function mapDiscoverResult(r, mediaType) {
+  return {
+    tmdbId: r.id,
+    mediaType,
+    title: mediaType === 'movie' ? r.title : r.name,
+    year: ((mediaType === 'movie' ? r.release_date : r.first_air_date) || '').slice(0, 4) || null,
+    posterUrl: r.poster_path ? `https://image.tmdb.org/t/p/w342${r.poster_path}` : null,
+    rating: typeof r.vote_average === 'number' ? Math.round(r.vote_average * 10) / 10 : null
+  };
+}
+
+const genreTitlesCache = new Map(); // genreId -> { data, expiresAt }
+const GENRE_TITLES_CACHE_TTL_MS = 60 * 60 * 1000; // 1 ora
+
+router.get('/genre-titles', async (req, res) => {
+  const genreId = req.query.id;
+  if (!genreId) {
+    return res.status(400).json({ error: 'Parametro mancante.' });
+  }
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  const cached = genreTitlesCache.get(genreId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return res.json(cached.data);
+  }
+
+  try {
+    const fetchType = async (mediaType) => {
+      const pages = [1, 2]; // 2 pagine da 20 risultati = 40 titoli per tipo
+      const responses = await Promise.all(pages.map(page => {
+        const url = `${TMDB_BASE}/discover/${mediaType}?api_key=${process.env.TMDB_API_KEY}&language=it-IT&sort_by=popularity.desc&with_genres=${genreId}&page=${page}`;
+        return fetch(url).then(r => r.json());
+      }));
+      let combined = [];
+      responses.forEach(data => { combined = combined.concat(data.results || []); });
+      return combined.map(r => mapDiscoverResult(r, mediaType));
+    };
+
+    const [movies, tv] = await Promise.all([fetchType('movie'), fetchType('tv')]);
+    const results = movies.concat(tv).sort((a, b) => (b.rating || 0) - (a.rating || 0));
+
+    genreTitlesCache.set(genreId, { data: results, expiresAt: Date.now() + GENRE_TITLES_CACHE_TTL_MS });
+    res.json(results);
+  } catch (err) {
+    console.error('Errore titoli genere TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
+// ---- Ricerca di un titolo all'interno di un genere specifico ----
+router.get('/genre-search', async (req, res) => {
+  const genreId = req.query.id;
+  const query = (req.query.query || '').trim();
+  if (!genreId || !query) {
+    return res.status(400).json({ error: 'Parametri mancanti.' });
+  }
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  try {
+    const searchType = async (mediaType) => {
+      const url = `${TMDB_BASE}/search/${mediaType}?api_key=${process.env.TMDB_API_KEY}&language=it-IT&include_adult=false&query=${encodeURIComponent(query)}`;
+      const tmdbRes = await fetch(url);
+      const data = await tmdbRes.json();
+      const genreIdNum = Number(genreId);
+      return (data.results || [])
+        .filter(item => Array.isArray(item.genre_ids) && item.genre_ids.includes(genreIdNum))
+        .map(item => mapDiscoverResult(item, mediaType));
+    };
+
+    const [movies, tv] = await Promise.all([searchType('movie'), searchType('tv')]);
+    res.json(movies.concat(tv));
+  } catch (err) {
+    console.error('Errore ricerca genere TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
 module.exports = router;

@@ -346,6 +346,29 @@ function mapDiscoverResult(r, mediaType) {
 const genreTitlesCache = new Map(); // genreId -> { data, expiresAt }
 const GENRE_TITLES_CACHE_TTL_MS = 60 * 60 * 1000; // 1 ora
 
+// TMDB usa ID di genere diversi per film e serie TV (es. "Azione" = 28 per i film,
+// ma per le serie non esiste: è "Action & Adventure" = 10759). Senza questa mappa,
+// interrogare /discover/tv o /search/tv con un ID pensato per i film restituisce
+// zero risultati per quasi tutti i generi. null = nessun equivalente TV riconosciuto
+// da TMDB (es. Horror): in quel caso il genere resta film-only.
+const MOVIE_TO_TV_GENRE = {
+  28: 10759,   // Azione -> Action & Adventure
+  35: 35,      // Commedia -> Comedy
+  18: 18,      // Dramma -> Drama
+  27: null,    // Horror -> nessun equivalente TV
+  10749: 10766, // Romantico -> Soap (il più vicino disponibile su TV)
+  878: 10765,  // Fantascienza -> Sci-Fi & Fantasy
+  16: 16,      // Animazione -> Animation
+  80: 80,      // Crime -> Crime
+  14: 10765,   // Fantasy -> Sci-Fi & Fantasy (TMDB le accorpa per le serie)
+  99: 99       // Documentario -> Documentary
+};
+
+function getTvGenreId(movieGenreId) {
+  const num = Number(movieGenreId);
+  return Object.prototype.hasOwnProperty.call(MOVIE_TO_TV_GENRE, num) ? MOVIE_TO_TV_GENRE[num] : num;
+}
+
 router.get('/genre-titles', async (req, res) => {
   const genreId = req.query.id;
   if (!genreId) {
@@ -361,10 +384,11 @@ router.get('/genre-titles', async (req, res) => {
   }
 
   try {
-    const fetchType = async (mediaType) => {
+    const fetchType = async (mediaType, idForType) => {
+      if (idForType === null) return []; // genere senza equivalente per questo tipo (es. Horror in TV)
       const pages = [1, 2]; // 2 pagine da 20 risultati = 40 titoli per tipo
       const responses = await Promise.all(pages.map(page => {
-        const url = `${TMDB_BASE}/discover/${mediaType}?api_key=${process.env.TMDB_API_KEY}&language=it-IT&sort_by=popularity.desc&with_genres=${genreId}&page=${page}`;
+        const url = `${TMDB_BASE}/discover/${mediaType}?api_key=${process.env.TMDB_API_KEY}&language=it-IT&sort_by=popularity.desc&with_genres=${idForType}&page=${page}`;
         return fetch(url).then(r => r.json());
       }));
       let combined = [];
@@ -372,7 +396,10 @@ router.get('/genre-titles', async (req, res) => {
       return combined.map(r => mapDiscoverResult(r, mediaType));
     };
 
-    const [movies, tv] = await Promise.all([fetchType('movie'), fetchType('tv')]);
+    const [movies, tv] = await Promise.all([
+      fetchType('movie', genreId),
+      fetchType('tv', getTvGenreId(genreId))
+    ]);
     const results = movies.concat(tv).sort((a, b) => (b.rating || 0) - (a.rating || 0));
 
     genreTitlesCache.set(genreId, { data: results, expiresAt: Date.now() + GENRE_TITLES_CACHE_TTL_MS });
@@ -395,17 +422,20 @@ router.get('/genre-search', async (req, res) => {
   }
 
   try {
-    const searchType = async (mediaType) => {
+    const searchType = async (mediaType, idForType) => {
+      if (idForType === null) return []; // genere senza equivalente per questo tipo
       const url = `${TMDB_BASE}/search/${mediaType}?api_key=${process.env.TMDB_API_KEY}&language=it-IT&include_adult=false&query=${encodeURIComponent(query)}`;
       const tmdbRes = await fetch(url);
       const data = await tmdbRes.json();
-      const genreIdNum = Number(genreId);
       return (data.results || [])
-        .filter(item => Array.isArray(item.genre_ids) && item.genre_ids.includes(genreIdNum))
+        .filter(item => Array.isArray(item.genre_ids) && item.genre_ids.includes(idForType))
         .map(item => mapDiscoverResult(item, mediaType));
     };
 
-    const [movies, tv] = await Promise.all([searchType('movie'), searchType('tv')]);
+    const [movies, tv] = await Promise.all([
+      searchType('movie', Number(genreId)),
+      searchType('tv', getTvGenreId(genreId))
+    ]);
     res.json(movies.concat(tv));
   } catch (err) {
     console.error('Errore ricerca genere TMDB:', err);

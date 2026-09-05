@@ -146,36 +146,45 @@ const TRENDING_CACHE_TTL_MS = 60 * 60 * 1000; // 1 ora
 
 router.get('/trending', async (req, res) => {
   const type = req.query.type === 'movie' ? 'movie' : 'tv';
+  const batch = Math.max(1, parseInt(req.query.page, 10) || 1); // ogni "batch" corrisponde a 100 titoli
   if (!process.env.TMDB_API_KEY) {
     return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
   }
 
-  const cached = trendingCache.get(type);
+  const cacheKey = type + ':' + batch;
+  const cached = trendingCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     return res.json(cached.data);
   }
 
   try {
-    const url = `${TMDB_BASE}/trending/${type}/week?api_key=${process.env.TMDB_API_KEY}&language=it-IT`;
-    const tmdbRes = await fetch(url);
-    const data = await tmdbRes.json();
+    // TMDB restituisce 20 risultati a pagina: per un blocco di 100 titoli servono 5 pagine.
+    const firstTmdbPage = (batch - 1) * 5 + 1;
+    const tmdbPages = [0, 1, 2, 3, 4].map(offset => firstTmdbPage + offset);
 
-    if (!tmdbRes.ok) {
+    const pageResponses = await Promise.all(tmdbPages.map(page => {
+      const url = `${TMDB_BASE}/trending/${type}/week?api_key=${process.env.TMDB_API_KEY}&language=it-IT&page=${page}`;
+      return fetch(url).then(r => r.json().then(data => ({ ok: r.ok, data })));
+    }));
+
+    if (pageResponses.some(p => !p.ok)) {
       return res.status(502).json({ error: 'TMDB non ha risposto correttamente.' });
     }
 
-    const results = (data.results || [])
-      .slice(0, 15)
-      .map(r => ({
-        tmdbId: r.id,
-        mediaType: type,
-        title: type === 'movie' ? r.title : r.name,
-        year: ((type === 'movie' ? r.release_date : r.first_air_date) || '').slice(0, 4) || null,
-        posterUrl: r.poster_path ? `https://image.tmdb.org/t/p/w342${r.poster_path}` : null,
-        rating: typeof r.vote_average === 'number' ? Math.round(r.vote_average * 10) / 10 : null
-      }));
+    let combined = [];
+    pageResponses.forEach(p => { combined = combined.concat(p.data.results || []); });
+    combined = combined.slice(0, 100);
 
-    trendingCache.set(type, { data: results, expiresAt: Date.now() + TRENDING_CACHE_TTL_MS });
+    const results = combined.map(r => ({
+      tmdbId: r.id,
+      mediaType: type,
+      title: type === 'movie' ? r.title : r.name,
+      year: ((type === 'movie' ? r.release_date : r.first_air_date) || '').slice(0, 4) || null,
+      posterUrl: r.poster_path ? `https://image.tmdb.org/t/p/w342${r.poster_path}` : null,
+      rating: typeof r.vote_average === 'number' ? Math.round(r.vote_average * 10) / 10 : null
+    }));
+
+    trendingCache.set(cacheKey, { data: results, expiresAt: Date.now() + TRENDING_CACHE_TTL_MS });
     res.json(results);
   } catch (err) {
     console.error('Errore trending TMDB:', err);

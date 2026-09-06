@@ -443,4 +443,56 @@ router.get('/genre-search', async (req, res) => {
   }
 });
 
+// ---- Dettagli completi di un titolo (per la pagina di dettaglio: statistiche + preview) ----
+router.get('/full-details', async (req, res) => {
+  const { id, type } = req.query;
+  if (!id || (type !== 'movie' && type !== 'tv')) {
+    return res.status(400).json({ error: 'Parametri mancanti o non validi.' });
+  }
+  if (!process.env.TMDB_API_KEY) {
+    return res.status(500).json({ error: 'Il server non è configurato per la ricerca online (manca TMDB_API_KEY).' });
+  }
+
+  try {
+    const url = `${TMDB_BASE}/${type}/${id}?api_key=${process.env.TMDB_API_KEY}&language=it-IT`;
+    const tmdbRes = await fetch(url);
+    const data = await tmdbRes.json();
+
+    if (!tmdbRes.ok) {
+      return res.status(404).json({ error: 'Titolo non trovato su TMDB.' });
+    }
+
+    const base = {
+      tmdbId: data.id,
+      title: type === 'movie' ? data.title : data.name,
+      overview: data.overview || '',
+      posterUrl: data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : null,
+      backdropUrl: data.backdrop_path ? `https://image.tmdb.org/t/p/w1280${data.backdrop_path}` : null,
+      genres: (data.genres || []).map(g => g.name),
+      rating: typeof data.vote_average === 'number' ? Math.round(data.vote_average * 10) / 10 : null,
+      voteCount: data.vote_count || null
+    };
+
+    if (type === 'movie') {
+      return res.json(Object.assign(base, {
+        type: 'film',
+        year: (data.release_date || '').slice(0, 4) || null,
+        runtime: data.runtime || null
+      }));
+    }
+
+    res.json(Object.assign(base, {
+      type: 'serie',
+      year: (data.first_air_date || '').slice(0, 4) || null,
+      episodeRuntime: (data.episode_run_time && data.episode_run_time[0]) || null,
+      status: TV_STATUS_LABELS_IT[data.status] || data.status || null,
+      numberOfSeasons: data.number_of_seasons || null,
+      numberOfEpisodes: data.number_of_episodes || null
+    }));
+  } catch (err) {
+    console.error('Errore dettagli completi TMDB:', err);
+    res.status(500).json({ error: 'Errore del server.' });
+  }
+});
+
 module.exports = router;
